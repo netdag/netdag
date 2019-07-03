@@ -3,13 +3,14 @@ from sys import argv
 from graph_tool import Graph, load_graph
 from graph_tool.topology import is_DAG, transitive_closure
 from graph_tool.stats import remove_parallel_edges
-# from graph_tool.draw import graph_draw as draw
+from graph_tool.draw import graph_draw
 from graph_tool.util import find_edge
 from pysmt.typing import INT, REAL
 from pysmt.shortcuts import (
     get_model,
     Symbol,
     GE,
+    LE,
     Int,
     Real,
     And,
@@ -25,6 +26,7 @@ from pysmt.shortcuts import (
 from drawSvg import Drawing, Rectangle, Text, Line
 from itertools import product
 from enum import Enum
+from network_statistics import LOG
 from network_statistics import TEST_GAMMA as GAMMA
 from network_statistics import TEST_D_N as D_N
 from network_statistics import TEST_LAMBDA as LAMBDA
@@ -138,25 +140,35 @@ def symbolic_app_agnostic_schedule(c_a_g, gamma, D_N):
     return formula, {'zeta': zeta, 'chi': chi, 'duration': duration}
 
 
-def symbolic_app_soft_schedule(c_a_g, symvars, LAMBDA):
-    JUMPTABLE_MAX=1e3
+def symbolic_app_soft_schedule(c_a_g, symvars, LAMBDA, D_N):
+    JUMPTABLE_MAX = 10
+    for i in range(D_N, JUMPTABLE_MAX):
+        assert(LAMBDA(i) > 0)
     zeta, chi, duration = [symvars[key] for key in ['zeta', 'chi', 'duration']]
     N_tasks = len(zeta) - len(chi)
     tc = transitive_closure(c_a_g)
-    lam = [Symbol('lam_%d' % i, REAL) for i in range(len(chi))]
+    log_lam = [Symbol('log_lam_%d' % i, REAL) for i in range(len(chi))]
 
+    domain = And([LT(chi_r, Int(JUMPTABLE_MAX)) for chi_r in chi])
     jumptable = And([
         Implies(
-            Equals(chi_r, i),
-            Equals(lam_r, Real(LAMBDA(i))))
-        for i, (chi_r, lam_r) in product(range(JUMPTABLE_MAX), zip(chi, lam))])A
+            Equals(chi_r, Int(i)),
+            Equals(log_lam_r, Real(LOG(LAMBDA(i)))))
+        for i, (chi_r, log_lam_r)
+        in product(range(JUMPTABLE_MAX), zip(chi, log_lam))
+        if LAMBDA(i) > 0])
     soft = And([
-        LT(
-            ~,
-            Times([]))
-        for tau in range(N_tasks)])
+                LE(
+                    Real(LOG(c_a_g.vertex_properties['vprops'][tau]['soft'])),
+                    Plus(
+                        [Real(LOG(1.))] +
+                        [log_lam[int(i) - N_tasks] for i in c_a_g.vertices()
+                         if i in tc.get_in_neighbors(tau) and
+                         c_a_g.vertex_properties['vprops'][i]['type'] ==
+                         NodeType.COMMUNICATION]))
+                for tau in range(N_tasks)])
 
-    formula = And(jumptable, soft)
+    formula = And(domain, jumptable, soft)
     return formula
 
 
@@ -237,10 +249,38 @@ def draw_schedule(c_a_g, model, symvars, gamma, filename):
 if __name__ == '__main__':
     g = load_graph(argv[1])
     assert(is_DAG(g))
+    graph_draw(
+        g,
+        output=argv[1] +
+        '_task_graph.png',
+        vertex_text=g.vertex_index,
+        vertex_font_size=18)
     l_g = line_graph(g)
     apply_simple_labeling(l_g)
     c_a_g = communication_adjusted(g, l_g)
+    # FEASIBLE AGNOSTIC
     formula, symvars = symbolic_app_agnostic_schedule(c_a_g, GAMMA, D_N)
-    formula += symbolic_app_soft_schedule(c_a_g, symvars, LAMBDA)
-    model = get_model(formula)
-    draw_schedule(c_a_g, model, symvars, GAMMA, argv[1]+'.png')
+    model = get_model(formula, solver_name='z3')
+    draw_schedule(
+        c_a_g,
+        model,
+        symvars,
+        GAMMA,
+        argv[1] +
+        '_schedule_agnostic.png')
+    # FEASIBLE SOFT
+    formula, symvars = symbolic_app_agnostic_schedule(c_a_g, GAMMA, D_N)
+    formula = formula.And(
+        symbolic_app_soft_schedule(
+            c_a_g, symvars, LAMBDA, D_N))
+    # debug, get minimal schedule given labeling
+    formula = formula.And(And([LT(zeta_tau, Int(156))
+                               for zeta_tau in symvars['zeta']]))
+    model = get_model(formula, solver_name='z3')
+    draw_schedule(
+        c_a_g,
+        model,
+        symvars,
+        GAMMA,
+        argv[1] +
+        '_schedule_soft.png')
