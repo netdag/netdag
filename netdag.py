@@ -22,7 +22,8 @@ from pysmt.shortcuts import (
     Bool,
     Plus,
     Times,
-    Equals)
+    Equals,
+    ForAll)
 from drawSvg import Drawing, Rectangle, Text, Line
 from itertools import product
 from enum import Enum
@@ -30,6 +31,7 @@ from network_statistics import LOG
 from network_statistics import TEST_GAMMA as GAMMA
 from network_statistics import TEST_D_N as D_N
 from network_statistics import TEST_LAMBDA as LAMBDA
+from network_statistics import TEST_BETA as BETA
 
 
 class NodeType(Enum):
@@ -80,7 +82,8 @@ def communication_adjusted(g, l_g):
         vprops[tau] = {
             'type': NodeType.TASK,
             'duration': g.vertex_properties['durations'][tau],
-            'soft': g.vertex_properties['soft'][tau]}
+            'soft': g.vertex_properties['soft'][tau],
+            'weakly-hard': g.vertex_properties['weakly-hard'][tau]}
     for r in communication_rounds:
         vprops[len(g.get_vertices())+r] = {
             'type': NodeType.COMMUNICATION,
@@ -169,6 +172,74 @@ def symbolic_app_soft_schedule(c_a_g, symvars, LAMBDA, D_N):
                 for tau in range(N_tasks)])
 
     formula = And(domain, jumptable, soft)
+    return formula
+
+
+def symbolic_app_weakly_hard_schedule(c_a_g, symvars, BETA):
+    JUMPTABLE_MAX = 10
+    zeta, chi, duration = [symvars[key] for key in ['zeta', 'chi', 'duration']]
+    N_tasks = len(zeta) - len(chi)
+    tc = transitive_closure(c_a_g)
+    beta = [[Symbol('beta_%d-0' % i, INT), Symbol('beta_%d-1' % i, INT)]
+            for i in range(len(chi))]
+    omega = {tau:
+             {int(alpha):
+              [Symbol('omega(%d)_%d-%d' % (tau, alpha, i), INT)
+               for i in
+               range(c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1])]
+              for alpha in c_a_g.vertices()
+              if int(alpha) == tau or
+              (alpha in tc.get_in_neighbors(tau) and
+               c_a_g.vertex_properties['vprops'][alpha]['type'] ==
+               NodeType.COMMUNICATION)}
+             for tau in range(N_tasks)}
+
+    domain = And([Or(
+        Equals(omega_tau_alpha_i, Int(0)),
+        Equals(omega_tau_alpha_i, Int(1)))
+        for omega_tau in omega.values()
+        for omega_tau_alpha in omega_tau.values()
+        for omega_tau_alpha_i in omega_tau_alpha]).And(
+            [LT(chi_r, Int(JUMPTABLE_MAX)) for chi_r in chi])
+    jumptable = And([
+        Implies(
+            Equals(chi_r, Int(i)),
+            And(
+                Equals(beta_r[0], Int(BETA(i)[0])),
+                Equals(beta_r[1], Int(BETA(i)[1]))))
+        for i, (chi_r, beta_r)
+        in product(range(JUMPTABLE_MAX), zip(chi, beta))])
+    WH = And([
+        ForAll(
+            [omega_tau_alpha_i
+             for omega_tau_alpha in omega[tau].values()
+             for omega_tau_alpha_i in omega_tau_alpha],
+            Implies(
+                And(
+                    And([And([
+                        Implies(
+                            Equals(Int(chi_c), chi[r-N_tasks]),
+                            And([
+                                LE(
+                                    Plus([
+                                        omega[tau][r][i]
+                                        for i in range(t, min(t+BETA(chi_c)[1], c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1]))]),
+                                    Int(BETA(chi_c)[0])
+                                )
+                                for t in range(max(1, c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1]-BETA(chi_c)[1]))]))
+                        for chi_c in range(JUMPTABLE_MAX)])
+                        for r in omega[tau]
+                        if r != tau]),
+                    And([Implies(Or([omega[tau][r][t] for r in omega[tau] if r != tau]), omega[tau][tau][t]) for t in range(c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1])])),
+                LE(
+                    Plus(omega[tau][tau]),
+                    Int(c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][0])
+                )
+            )
+        )
+        for tau in range(N_tasks)])
+
+    formula = And(domain, jumptable, WH)
     return formula
 
 
@@ -284,3 +355,16 @@ if __name__ == '__main__':
         GAMMA,
         argv[1] +
         '_schedule_soft.png')
+    # FEASIBLE WEAKLY-HARD
+    formula, symvars = symbolic_app_agnostic_schedule(c_a_g, GAMMA, D_N)
+    formula = formula.And(
+        symbolic_app_weakly_hard_schedule(
+            c_a_g, symvars, BETA))
+    model = get_model(formula, solver_name='z3')
+    draw_schedule(
+        c_a_g,
+        model,
+        symvars,
+        GAMMA,
+        argv[1] +
+        '_schedule_weakly_hard.png')
