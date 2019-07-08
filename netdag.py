@@ -23,10 +23,11 @@ from pysmt.shortcuts import (
     Plus,
     Times,
     Equals,
+    NotEquals,
     ForAll)
 from drawSvg import Drawing, Rectangle, Text, Line
 from itertools import product
-from enum import Enum
+from enum import IntEnum
 from network_statistics import LOG
 from network_statistics import TEST_GAMMA as GAMMA
 from network_statistics import TEST_D_N as D_N
@@ -34,7 +35,7 @@ from network_statistics import TEST_LAMBDA as LAMBDA
 from network_statistics import TEST_BETA as BETA
 
 
-class NodeType(Enum):
+class NodeType(IntEnum):
     TASK = 0
     COMMUNICATION = 1
 
@@ -80,13 +81,13 @@ def communication_adjusted(g, l_g):
     vprops = c_a_g.new_vertex_property('object')
     for tau in g.vertices():
         vprops[tau] = {
-            'type': NodeType.TASK,
+            'type': int(NodeType.TASK),
             'duration': g.vertex_properties['durations'][tau],
             'soft': g.vertex_properties['soft'][tau],
             'weakly-hard': g.vertex_properties['weakly-hard'][tau]}
     for r in communication_rounds:
         vprops[len(g.get_vertices())+r] = {
-            'type': NodeType.COMMUNICATION,
+            'type': int(NodeType.COMMUNICATION),
             'width': sum([g.edge_properties['widths'][
                 find_edge(g, g.edge_index, l_g.vertex_index[e])[0]]
                 for e in l_g.vertices()
@@ -133,10 +134,11 @@ def symbolic_app_agnostic_schedule(c_a_g, gamma, D_N):
          for i in c_a_g.vertices()])
 
     exclusion = And([
-        Or(LT(zeta[tau], Minus(zeta[r], duration[r])),
-           GT(Minus(zeta[tau], duration[tau]), zeta[r]))
-        for tau, r in product(
-            range(N_tasks), range(N_tasks, c_a_g.num_vertices()))])
+        Or(LT(zeta[s], Minus(zeta[r], duration[r])),
+           GT(Minus(zeta[s], duration[s]), zeta[r]))
+        for s, r in product(
+            range(c_a_g.num_vertices()), range(N_tasks, c_a_g.num_vertices()))
+        if s != r])
 
     formula = And(domains, order, durations, exclusion)
 
@@ -194,13 +196,7 @@ def symbolic_app_weakly_hard_schedule(c_a_g, symvars, BETA):
                NodeType.COMMUNICATION)}
              for tau in range(N_tasks)}
 
-    domain = And([Or(
-        Equals(omega_tau_alpha_i, Int(0)),
-        Equals(omega_tau_alpha_i, Int(1)))
-        for omega_tau in omega.values()
-        for omega_tau_alpha in omega_tau.values()
-        for omega_tau_alpha_i in omega_tau_alpha]).And(
-            [LT(chi_r, Int(JUMPTABLE_MAX)) for chi_r in chi])
+    domain = And([LT(chi_r, Int(JUMPTABLE_MAX)) for chi_r in chi])
     jumptable = And([
         Implies(
             Equals(chi_r, Int(i)),
@@ -214,30 +210,50 @@ def symbolic_app_weakly_hard_schedule(c_a_g, symvars, BETA):
             [omega_tau_alpha_i
              for omega_tau_alpha in omega[tau].values()
              for omega_tau_alpha_i in omega_tau_alpha],
-            Implies(
-                And(
-                    And([And([
-                        Implies(
-                            Equals(Int(chi_c), chi[r-N_tasks]),
-                            And([
-                                LE(
-                                    Plus([
-                                        omega[tau][r][i]
-                                        for i in range(t, min(t+BETA(chi_c)[1], c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1]))]),
-                                    Int(BETA(chi_c)[0])
-                                )
-                                for t in range(max(1, c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1]-BETA(chi_c)[1]))]))
-                        for chi_c in range(JUMPTABLE_MAX)])
-                        for r in omega[tau]
-                        if r != tau]),
-                    And([Implies(Or([omega[tau][r][t] for r in omega[tau] if r != tau]), omega[tau][tau][t]) for t in range(c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][1])])),
-                LE(
-                    Plus(omega[tau][tau]),
-                    Int(c_a_g.vertex_properties['vprops'][tau]['weakly-hard'][0])
-                )
-            )
-        )
-        for tau in range(N_tasks)])
+            Implies(And(
+                And([Or(
+                    Equals(omega_tau_alpha_i, Int(0)),
+                    Equals(omega_tau_alpha_i, Int(1)))
+                    for omega_tau in omega.values()
+                    for omega_tau_alpha in omega_tau.values()
+                    for omega_tau_alpha_i in omega_tau_alpha]),
+                And([And([
+                    Implies(
+                        Equals(Int(chi_c), chi[r-N_tasks]),
+                        And([LE(
+                            Plus([Int(0)]+[omega[tau][r][i]
+                                           for i in
+                                           range(t,
+                                                 min(t+BETA(chi_c)[1],
+                                                     c_a_g.
+                                                     vertex_properties[
+                                                         'vprops'][tau][
+                                                             'weakly-hard'][
+                                                                 1]))]),
+                            Int(BETA(chi_c)[0]))
+                            for t in
+                            range(
+                                max(1,
+                                    c_a_g.vertex_properties[
+                                        'vprops'][tau][
+                                            'weakly-hard'][1] -
+                                    BETA(chi_c)[1]))]))
+                    for chi_c in range(JUMPTABLE_MAX)])
+                    for r in omega[tau]
+                    if r != tau]),
+                And([Implies(
+                    Or([Bool(False)] +
+                       [Equals(omega[tau][r][t], Int(1))
+                        for r in omega[tau] if r != tau]),
+                    Equals(omega[tau][tau][t], Int(1)))
+                    for t in
+                    range(c_a_g.vertex_properties[
+                        'vprops'][tau]['weakly-hard'][1])])),
+                    LE(Plus(omega[tau][tau]),
+                       Int(c_a_g.vertex_properties[
+                           'vprops'][tau]['weakly-hard'][0]))))
+        for tau in range(N_tasks)
+        if tc.get_in_degrees([tau])[0] > 0])
 
     formula = And(domain, jumptable, WH)
     return formula
@@ -317,6 +333,130 @@ def draw_schedule(c_a_g, model, symvars, gamma, filename):
     d.savePng(filename)
 
 
+def get_optimal_model_fixed_labeling(formula, symvars, upper_bound=None):
+    if upper_bound:
+        formula = formula.And(And([LT(zeta_tau, Int(upper_bound))
+                                   for zeta_tau in symvars['zeta']]))
+    models = [get_model(formula, solver_name='z3')]
+    if not models[-1]:
+        return None
+    while models[-1]:
+        schedule_length = max(
+            map(lambda x: models[-1].get_py_value(x), symvars['zeta']))
+        formula = formula.And(And([LT(zeta_tau, Int(schedule_length))
+                                   for zeta_tau in symvars['zeta']]))
+        models.append(get_model(formula, solver_name='z3'))
+    return models[-2]
+
+
+def apply_CFOP_labeling(l_g, labels):
+    CFOP_labeling = l_g.new_vertex_property('int16_t')
+    CFOP_labeling.get_array()[:] = labels
+    l_g.vertex_properties['CFOP_labeling'] = CFOP_labeling
+
+
+def get_optimal_agnostic_schedule(g, l_g, gamma, D_N):
+    UB = None
+    best_model = None
+    best_symvars = None
+    best_labeling = None
+    for labeling in enumerate_labelings(l_g):
+        apply_CFOP_labeling(l_g, labeling)
+        c_a_g = communication_adjusted(g, l_g)
+        formula, symvars = symbolic_app_agnostic_schedule(c_a_g, gamma, D_N)
+        model = get_optimal_model_fixed_labeling(
+            formula, symvars, upper_bound=UB)
+        if model:
+            schedule_length = max(
+                map(lambda x: model.get_py_value(x), symvars['zeta']))
+            if not UB or schedule_length < UB:
+                UB = schedule_length
+                best_model = model
+                best_symvars = symvars
+                best_labeling = labeling
+    return best_model, best_symvars, best_labeling
+
+
+def get_optimal_soft_schedule(g, l_g, gamma, D_N, performance_function):
+    UB = None
+    best_model = None
+    best_symvars = None
+    best_labeling = None
+    for labeling in enumerate_labelings(l_g):
+        apply_CFOP_labeling(l_g, labeling)
+        c_a_g = communication_adjusted(g, l_g)
+        formula, symvars = symbolic_app_agnostic_schedule(c_a_g, gamma, D_N)
+        formula = formula.And(
+            symbolic_app_soft_schedule(
+                c_a_g, symvars, performance_function, D_N))
+        model = get_optimal_model_fixed_labeling(
+            formula, symvars, upper_bound=UB)
+        if model:
+            schedule_length = max(
+                map(lambda x: model.get_py_value(x), symvars['zeta']))
+            if not UB or schedule_length < UB:
+                UB = schedule_length
+                best_model = model
+                best_symvars = symvars
+                best_labeling = labeling
+    return best_model, best_symvars, best_labeling
+
+
+def get_optimal_weakly_hard_schedule(g, l_g, gamma, D_N, performance_function):
+    UB = None
+    best_model = None
+    best_symvars = None
+    best_labeling = None
+    for labeling in enumerate_labelings(l_g):
+        apply_CFOP_labeling(l_g, labeling)
+        c_a_g = communication_adjusted(g, l_g)
+        formula, symvars = symbolic_app_agnostic_schedule(c_a_g, gamma, D_N)
+        formula = formula.And(
+            symbolic_app_weakly_hard_schedule(
+                c_a_g, symvars, performance_function))
+        model = get_optimal_model_fixed_labeling(
+            formula, symvars, upper_bound=UB)
+        if model:
+            schedule_length = max(
+                map(lambda x: model.get_py_value(x), symvars['zeta']))
+            if not UB or schedule_length < UB:
+                UB = schedule_length
+                best_model = model
+                best_symvars = symvars
+                best_labeling = labeling
+    return best_model, best_symvars, best_labeling
+
+
+def enumerate_labelings(l_g):
+    tc = transitive_closure(l_g)
+    apply_simple_labeling(l_g)
+    LB = max(l_g.vertex_properties['CFOP_labeling']) + 1
+    UB = l_g.num_vertices()
+    labels = [Symbol('label_%d' % i, INT) for i in range(UB)]
+    structure = And([Implies(Bool(r in tc.get_in_neighbors(s)),
+                             LT(labels[r], labels[s]))
+                     for r, s in product(range(UB), repeat=2)])
+    for codomain_size in range(LB, UB+1):
+        codomain = And(
+            And([Or([
+                Equals(label, Int(i))
+                for label in labels])
+                for i in range(codomain_size)]),
+            And([
+                And(
+                    LT(label, Int(codomain_size)),
+                    GE(label, Int(0)))
+                for label in labels]))
+        formula = And(structure, codomain)
+        while True:
+            model = get_model(formula, solver_name='z3')
+            if not model:
+                break
+            yield [model.get_py_value(label) for label in labels]
+            formula = formula.And(Or([
+                NotEquals(label, Int(model.get_py_value(label)))
+                for label in labels]))
+
 if __name__ == '__main__':
     g = load_graph(argv[1])
     assert(is_DAG(g))
@@ -327,42 +467,33 @@ if __name__ == '__main__':
         vertex_text=g.vertex_index,
         vertex_font_size=18)
     l_g = line_graph(g)
-    apply_simple_labeling(l_g)
-    c_a_g = communication_adjusted(g, l_g)
-    # FEASIBLE AGNOSTIC
-    formula, symvars = symbolic_app_agnostic_schedule(c_a_g, GAMMA, D_N)
-    model = get_model(formula, solver_name='z3')
+
+    model, symvars, labeling = get_optimal_agnostic_schedule(g, l_g, GAMMA, D_N)
+    apply_CFOP_labeling(l_g, labeling)
     draw_schedule(
-        c_a_g,
+        communication_adjusted(g, l_g),
         model,
         symvars,
         GAMMA,
         argv[1] +
         '_schedule_agnostic.png')
-    # FEASIBLE SOFT
-    formula, symvars = symbolic_app_agnostic_schedule(c_a_g, GAMMA, D_N)
-    formula = formula.And(
-        symbolic_app_soft_schedule(
-            c_a_g, symvars, LAMBDA, D_N))
-    # debug, get minimal schedule given labeling
-    formula = formula.And(And([LT(zeta_tau, Int(156))
-                               for zeta_tau in symvars['zeta']]))
-    model = get_model(formula, solver_name='z3')
+
+    model, symvars, labeling = get_optimal_soft_schedule(
+        g, l_g, GAMMA, D_N, LAMBDA)
+    apply_CFOP_labeling(l_g, labeling)
     draw_schedule(
-        c_a_g,
+        communication_adjusted(g, l_g),
         model,
         symvars,
         GAMMA,
         argv[1] +
         '_schedule_soft.png')
-    # FEASIBLE WEAKLY-HARD
-    formula, symvars = symbolic_app_agnostic_schedule(c_a_g, GAMMA, D_N)
-    formula = formula.And(
-        symbolic_app_weakly_hard_schedule(
-            c_a_g, symvars, BETA))
-    model = get_model(formula, solver_name='z3')
+
+    model, symvars, labeling = get_optimal_weakly_hard_schedule(
+        g, l_g, GAMMA, D_N, BETA)
+    apply_CFOP_labeling(l_g, labeling)
     draw_schedule(
-        c_a_g,
+        communication_adjusted(g, l_g),
         model,
         symvars,
         GAMMA,

@@ -9,6 +9,11 @@ def TEST_LAMBDA(n):
     else:
         return float(expit(n/2))
 
+
+def TEST_BETA(n):
+    return (1, 1000)
+
+
 def LOG(f):
     from numpy import log
     return float(log(f))
