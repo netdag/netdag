@@ -25,14 +25,24 @@ from pysmt.shortcuts import (
     Equals,
     NotEquals,
     ForAll)
+from cvxpy import (
+    matmul,
+    Variable,
+    Minimize,
+    Problem)
+from cvxpy import sum as cvxsum
+from cvxpy import multiply as cvxmultiply
+from cvxpy import abs as cvxabs
+from cvxpy import norm_inf
+from numpy import array
 from drawSvg import Drawing, Rectangle, Text, Line
-from itertools import product
+from itertools import product, chain
 from enum import IntEnum
 from network_statistics import LOG
-from network_statistics import TEST_GAMMA as GAMMA
-from network_statistics import TEST_D_N as D_N
-from network_statistics import TEST_LAMBDA as LAMBDA
-from network_statistics import TEST_BETA as BETA
+# from network_statistics import TEST_GAMMA as GAMMA
+# from network_statistics import TEST_D_N as D_N
+# from network_statistics import TEST_LAMBDA as LAMBDA
+# from network_statistics import TEST_BETA as BETA
 
 
 class NodeType(IntEnum):
@@ -457,6 +467,125 @@ def enumerate_labelings(l_g):
                 NotEquals(label, Int(model.get_py_value(label)))
                 for label in labels]))
 
+
+def get_logical_edges(g):
+    sources = set([])
+    logical_edges = []
+    for e in g.edges():
+        if e.source() not in sources:
+            logical_edges.append(e)
+            sources.add(e.source())
+    return logical_edges
+
+
+def get_makespan_optimal_soft_schedule(g, network):
+    # MILP formulation
+    tc = transitive_closure(g)
+    logical_edges = get_logical_edges(g)
+    JUMPTABLE_MAX = 10
+    A, B, C, D, GAMMA = (network[key] for key in ('A', 'B', 'C', 'D', 'GAMMA'))
+    M = 1000
+
+    label = Variable(shape=(len(logical_edges),), integer=True)
+    # first half for slot, second half for beacons
+    chi = Variable(shape=(2*len(logical_edges),), integer=True)
+
+    duration = Variable(shape=(len(logical_edges),), integer=True)
+    zeta = Variable(shape=(g.num_vertices()+len(logical_edges),), integer=True)
+    delta_e_in_r = Variable(
+        shape=(
+            len(logical_edges),
+            len(logical_edges)),
+         boolean=True)
+    delta_chi_eq_i = Variable(
+        shape=(
+            2*len(logical_edges),
+            JUMPTABLE_MAX),
+        boolean=True)
+    delta_tau_before_r = Variable(
+        shape=(
+            g.num_vertices()+len(logical_edges),
+            len(logical_edges)),
+        boolean=True)
+
+    domain = [
+        0 <= label,
+        label <= len(logical_edges)-1,
+        1 <= chi,
+        chi <= JUMPTABLE_MAX-1,
+        0 <= zeta]
+    one_hot = [
+        cvxsum(delta_e_in_r, axis=1) == len(logical_edges)-1,
+        cvxsum(delta_chi_eq_i, axis=1) == JUMPTABLE_MAX-1,
+        cvxsum(delta_tau_before_r, axis=1) == len(logical_edges)-1]
+    CFOP = [
+        label[logical_edges.index(r)] <= label[logical_edges.index(s)] - 1
+        for r, s in product(logical_edges, repeat=2)
+        if r.source() in tc.get_in_neighbors(s.target()) and r != s]
+    durations = [duration ==
+                 cvxmultiply(
+                     1 - cvxsum(delta_e_in_r, axis=0),
+                     A + (2 * chi[len(logical_edges):] + B) * (C + D * GAMMA)) +
+                 matmul(
+                     (1 - delta_e_in_r).T,
+                     A + cvxmultiply(
+                         2 * chi[: len(logical_edges)] + B,
+                         C + D * array([g.edge_properties['widths'][e]
+                                        for e in logical_edges])))]
+    label_to_delta = [
+        delta_e_in_r[e][r] <= M *
+        cvxabs(
+            label[e] -
+            r) for e,
+        r in product(
+            range(
+                len(logical_edges)),
+                 repeat=2)]
+    chi_to_delta = [
+        delta_chi_eq_i[r][i] <= M *
+        cvxabs(
+            chi[r] -
+            i) for r,
+        i in product(
+            range(
+                2 *
+                len(logical_edges)),
+                 range(JUMPTABLE_MAX))]
+    order = [
+        zeta[int(tau)] <= zeta[int(mu)] - g.vertex_properties['durations'][mu] -
+        1 for tau, mu in product(g.vertices(),
+                                 repeat=2)
+        if tau in tc.get_in_neighbors(mu)] + [
+        zeta[r + g.num_vertices()] <= zeta[r + 1 + g.num_vertices()] -
+        duration[r + 1] - 1 for r in range(len(logical_edges) - 1)] + [
+        zeta[int(tau)] - g.vertex_properties['durations'][tau] -
+        zeta[r + g.num_vertices()] - 1 >= -M * delta_e_in_r[e][r]
+        for tau in g.vertices()
+        for r in range(len(logical_edges)) for e in range(len(logical_edges))]
+    exclusion = list(chain.from_iterable(
+                         [[-M * delta_tau_before_r[int(tau)][r] <=
+                           zeta[r + g.num_vertices()] - duration[r] -
+                           zeta[int(tau)],
+                           M * (1 - delta_tau_before_r[int(tau)][r]) +
+                           zeta[int(tau)] - g.vertex_properties
+                           ['durations'][tau] - 1 >= zeta
+                           [g.num_vertices() + r]]
+                          for tau in g.vertices()
+                          for r in range(len(logical_edges))]))
+
+    constraints = domain + one_hot + CFOP + durations + \
+        label_to_delta + chi_to_delta + order + exclusion
+    # durations is not DCP
+    # label_to_delta is not DCP
+    # chi_to_delta is not DCP
+    print(all(map(lambda x: x.is_dcp(), exclusion)))
+    exit()
+    objective = Minimize(norm_inf(zeta))
+    problem = Problem(objective, constraints)
+    result = problem.solve()
+    print(result)
+
+
 if __name__ == '__main__':
     g = load_graph(argv[1])
     assert(is_DAG(g))
@@ -466,36 +595,6 @@ if __name__ == '__main__':
         '_task_graph.png',
         vertex_text=g.vertex_index,
         vertex_font_size=18)
-    l_g = line_graph(g)
 
-    model, symvars, labeling = get_optimal_agnostic_schedule(g, l_g, GAMMA, D_N)
-    apply_CFOP_labeling(l_g, labeling)
-    draw_schedule(
-        communication_adjusted(g, l_g),
-        model,
-        symvars,
-        GAMMA,
-        argv[1] +
-        '_schedule_agnostic.png')
-
-    model, symvars, labeling = get_optimal_soft_schedule(
-        g, l_g, GAMMA, D_N, LAMBDA)
-    apply_CFOP_labeling(l_g, labeling)
-    draw_schedule(
-        communication_adjusted(g, l_g),
-        model,
-        symvars,
-        GAMMA,
-        argv[1] +
-        '_schedule_soft.png')
-
-    model, symvars, labeling = get_optimal_weakly_hard_schedule(
-        g, l_g, GAMMA, D_N, BETA)
-    apply_CFOP_labeling(l_g, labeling)
-    draw_schedule(
-        communication_adjusted(g, l_g),
-        model,
-        symvars,
-        GAMMA,
-        argv[1] +
-        '_schedule_weakly_hard.png')
+    model = get_makespan_optimal_soft_schedule(
+        g, {'A': 1, 'B': 1, 'C': 1, 'D': 1, 'GAMMA': 1})
