@@ -31,9 +31,7 @@ from cvxpy import (
     Minimize,
     Problem)
 from cvxpy import sum as cvxsum
-from cvxpy import multiply as cvxmultiply
-from cvxpy import abs as cvxabs
-from cvxpy import norm_inf
+from cvxpy import max as cvxmax
 from numpy import array
 from drawSvg import Drawing, Rectangle, Text, Line
 from itertools import product, chain
@@ -41,8 +39,12 @@ from enum import IntEnum
 from network_statistics import LOG
 # from network_statistics import TEST_GAMMA as GAMMA
 # from network_statistics import TEST_D_N as D_N
-# from network_statistics import TEST_LAMBDA as LAMBDA
+from network_statistics import TEST_LAMBDA as LAMBDA
 # from network_statistics import TEST_BETA as BETA
+
+
+verbose = True
+verboseprint = print if verbose else lambda *a, **k: None
 
 
 class NodeType(IntEnum):
@@ -343,6 +345,87 @@ def draw_schedule(c_a_g, model, symvars, gamma, filename):
     d.savePng(filename)
 
 
+def draw_schedule_MIP(g, model, network, filename):
+    A, B, C, D, GAMMA = (network[key] for key in ('A', 'B', 'C', 'D', 'GAMMA'))
+    zeta, chi, duration, label = model
+    TOP = 30
+    BOTTOM = 30
+    LEFT = 100
+    RIGHT = 30
+    WIDTH = 800
+    HEIGHT = 800
+    ROW_OFFSET = 20
+    TEXT_OFFSET = 40
+    FONTSIZE = 30
+    d = Drawing(WIDTH, HEIGHT)
+    d.append(Rectangle(0, 0, WIDTH, HEIGHT, fill='white'))
+    N_tasks = g.num_vertices()
+    N_rounds = len(zeta.value) - N_tasks
+    min_t = min(
+        zeta[:N_tasks].value - g.vertex_properties['durations'].get_array())
+    # min_t = min(min_t, min(zeta[N_tasks:].value - duration.value))
+    max_t = max(zeta.value)
+    quantum = (WIDTH-RIGHT-LEFT) / (max_t-min_t)
+    block_height = (HEIGHT-TOP-BOTTOM-ROW_OFFSET*(N_tasks)) / (N_tasks+1)
+    for i in range(N_tasks):
+        d.append(Rectangle(
+            quantum*abs(min_t) + LEFT+quantum*(zeta[i].value -
+                                               g.vertex_properties[
+                                                   'durations'][i]),
+            HEIGHT-TOP-ROW_OFFSET*i-block_height*(i+1),
+            # model.get_py_value(duration[i]),
+            quantum*g.vertex_properties['durations'][i],
+            block_height,
+            fill='green',
+            stroke_width=2,
+            stroke='black'))
+        d.append(
+            Text(
+                str(i),
+                FONTSIZE, TEXT_OFFSET, HEIGHT - TOP - ROW_OFFSET * i -
+                block_height * (i + 1) + block_height / 2, center=True,
+                fill='black'))
+    for i in range(N_rounds):
+        if duration.value[i] == 0:
+            continue
+        d.append(Rectangle(
+            quantum*abs(min_t)+LEFT+quantum*(zeta[N_tasks+i].value -
+                                             duration[i].value),
+            HEIGHT-TOP-ROW_OFFSET*N_tasks-block_height*(N_tasks+1),
+            quantum*duration[i].value,
+            block_height,
+            fill='red',
+            stroke_width=2,
+            stroke='black'))
+        # d.append(Rectangle(
+        #     quantum*abs(min_t)+LEFT+quantum*(model.get_py_value(zeta[i]) -
+        #                                      model.get_py_value(duration[i])),
+        #     HEIGHT-TOP-ROW_OFFSET*N_tasks-block_height*(N_tasks+1),
+        #     quantum*gamma,
+        #     block_height,
+        #     fill='yellow',
+        #     stroke_width=2,
+        #     stroke='black'))
+        # for j in range(1, model.get_py_value(chi[i-N_tasks])):
+        #     round_width = (model.get_py_value(
+        #         duration[i])-gamma)/model.get_py_value(chi[i-N_tasks])
+        #     x = LEFT+quantum*(abs(min_t)+(model.get_py_value(
+        #         zeta[i]) - model.get_py_value(duration[i]))+gamma+j*round_width)
+        #     d.append(
+        #         Line(
+        #             x, HEIGHT - TOP - ROW_OFFSET * N_tasks - block_height *
+        #             (N_tasks + 1),
+        #             x, HEIGHT - TOP - ROW_OFFSET * N_tasks - block_height *
+        #             N_tasks, stroke='black', stroke_width=2))
+    d.append(
+        Text(
+            'LWB',
+            FONTSIZE, TEXT_OFFSET, HEIGHT - TOP - ROW_OFFSET * N_tasks -
+            block_height * (N_tasks + 1) + block_height / 2, center=True,
+            fill='black'))
+    d.savePng(filename)
+
+
 def get_optimal_model_fixed_labeling(formula, symvars, upper_bound=None):
     if upper_bound:
         formula = formula.And(And([LT(zeta_tau, Int(upper_bound))
@@ -479,115 +562,174 @@ def get_logical_edges(g):
 
 
 def get_makespan_optimal_soft_schedule(g, network):
+    verboseprint('*computing optimal soft-real time schedule via MIP*')
     # MILP formulation
     tc = transitive_closure(g)
     logical_edges = get_logical_edges(g)
-    JUMPTABLE_MAX = 10
-    A, B, C, D, GAMMA = (network[key] for key in ('A', 'B', 'C', 'D', 'GAMMA'))
+    JUMPTABLE_MAX = 20
+    A, B, C, D, GAMMA, LAMBDA = (network[key]
+                                 for key in
+                                 ('A', 'B', 'C', 'D', 'GAMMA', 'LAMBDA'))
     M = 1000
 
+    verboseprint('\tinstantiating symvars...')
     label = Variable(shape=(len(logical_edges),), integer=True)
     # first half for slot, second half for beacons
     chi = Variable(shape=(2*len(logical_edges),), integer=True)
-
     duration = Variable(shape=(len(logical_edges),), integer=True)
     zeta = Variable(shape=(g.num_vertices()+len(logical_edges),), integer=True)
     delta_e_in_r = Variable(
         shape=(
             len(logical_edges),
             len(logical_edges)),
-         boolean=True)
+        boolean=True)
     delta_chi_eq_i = Variable(
         shape=(
             2*len(logical_edges),
             JUMPTABLE_MAX),
         boolean=True)
+    delta_e_in_r_cross_chi_eq_i = {(e, r): Variable(
+        shape=(
+            2*len(logical_edges),
+            JUMPTABLE_MAX))
+        for e, r in product(range(len(logical_edges)), repeat=2)}
     delta_tau_before_r = Variable(
         shape=(
             g.num_vertices()+len(logical_edges),
             len(logical_edges)),
         boolean=True)
+    delta_empty = Variable(shape=(len(logical_edges),), boolean=True)
 
+    verboseprint('\tgenerating constraint clauses...')
     domain = [
-        0 <= label,
-        label <= len(logical_edges)-1,
+        1 <= label,
+        label <= len(logical_edges),
         1 <= chi,
         chi <= JUMPTABLE_MAX-1,
         0 <= zeta]
     one_hot = [
-        cvxsum(delta_e_in_r, axis=1) == len(logical_edges)-1,
-        cvxsum(delta_chi_eq_i, axis=1) == JUMPTABLE_MAX-1,
-        cvxsum(delta_tau_before_r, axis=1) == len(logical_edges)-1]
+        cvxsum(delta_e_in_r, axis=1) == 1,
+        cvxsum(delta_chi_eq_i, axis=1) == 1]
     CFOP = [
         label[logical_edges.index(r)] <= label[logical_edges.index(s)] - 1
         for r, s in product(logical_edges, repeat=2)
-        if r.source() in tc.get_in_neighbors(s.target()) and r != s]
-    durations = [duration ==
-                 cvxmultiply(
-                     1 - cvxsum(delta_e_in_r, axis=0),
-                     A + (2 * chi[len(logical_edges):] + B) * (C + D * GAMMA)) +
-                 matmul(
-                     (1 - delta_e_in_r).T,
-                     A + cvxmultiply(
-                         2 * chi[: len(logical_edges)] + B,
-                         C + D * array([g.edge_properties['widths'][e]
-                                        for e in logical_edges])))]
+        if r.source() in tc.get_in_neighbors(s.source())]
+    task_partitioning_by_round = [
+        delta_tau_before_r[int(tau)][r] <= delta_tau_before_r[int(mu)][r]
+        for tau, mu, r in
+        product(tc.vertices(), tc.vertices(), range(len(logical_edges)))
+        if tau in tc.get_in_neighbors(mu)]
+    task_partitioning_by_round += [
+        delta_tau_before_r[r+g.num_vertices()][s] == 0
+        if r < s else delta_tau_before_r[r+g.num_vertices()][s] == 1
+        for r, s in product(range(len(logical_edges)), repeat=2)]
+    round_empty = [
+        chi[len(logical_edges):] <= M * cvxsum(delta_e_in_r, axis=0) + 1]
+    round_empty_to_delta = [
+        delta_empty[r] <= 1 - delta_e_in_r[e][r]
+        for r, e in product(range(len(logical_edges)), repeat=2)]
+    round_empty_to_delta += [
+        delta_empty >= cvxsum(1-delta_e_in_r, axis=0)-len(logical_edges)+1]
+    durations = [
+        duration[r] == A +
+        (2 * chi[r + len(logical_edges)] + B) * (C + D * GAMMA) -
+        delta_empty[r] * (A + (2 + B) * (C + D * GAMMA)) +
+        sum(
+            [A * delta_e_in_r[e][r] +
+             (2 *
+              sum(
+                  [i * delta_e_in_r_cross_chi_eq_i[(e, r)][e][i]
+                   for i in range(JUMPTABLE_MAX)]) + B * delta_e_in_r[e][r]) *
+             (C + D * g.edge_properties['widths'][logical_edges[e]])
+             for e in range(len(logical_edges))])
+        for r in range(len(logical_edges))]
     label_to_delta = [
-        delta_e_in_r[e][r] <= M *
-        cvxabs(
-            label[e] -
-            r) for e,
-        r in product(
-            range(
-                len(logical_edges)),
-                 repeat=2)]
+        label == matmul(
+            delta_e_in_r,
+            array(
+                range(1,
+                      1+len(logical_edges))))]
     chi_to_delta = [
-        delta_chi_eq_i[r][i] <= M *
-        cvxabs(
-            chi[r] -
-            i) for r,
-        i in product(
-            range(
-                2 *
-                len(logical_edges)),
-                 range(JUMPTABLE_MAX))]
+        chi == matmul(
+            delta_chi_eq_i,
+            array(range(JUMPTABLE_MAX)))]
+    binary_mult_linearization = list(chain.from_iterable(
+        [[0 <= delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i],
+          delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i] <= 1,
+          delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i] <= delta_e_in_r[e][r],
+          delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i] <=
+          delta_chi_eq_i[chir][i],
+          delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i] >=
+          delta_e_in_r[e][r] + delta_chi_eq_i[chir][i] - 1]
+         for e, r, chir, i in
+         product(
+             range(len(logical_edges)),
+             range(len(logical_edges)),
+             range(2*len(logical_edges)),
+             range(JUMPTABLE_MAX))]))
     order = [
         zeta[int(tau)] <= zeta[int(mu)] - g.vertex_properties['durations'][mu] -
         1 for tau, mu in product(g.vertices(),
                                  repeat=2)
-        if tau in tc.get_in_neighbors(mu)] + [
+        if tau in tc.get_in_neighbors(mu)]
+    order += [
         zeta[r + g.num_vertices()] <= zeta[r + 1 + g.num_vertices()] -
-        duration[r + 1] - 1 for r in range(len(logical_edges) - 1)] + [
+        duration[r + 1] - 1 for r in range(len(logical_edges) - 1)]
+    # the following two can be re-written using delta_tau_before_r ?
+    order += [
         zeta[int(tau)] - g.vertex_properties['durations'][tau] -
-        zeta[r + g.num_vertices()] - 1 >= -M * delta_e_in_r[e][r]
+        zeta[r + g.num_vertices()] - 1 >= -M * (1-delta_e_in_r[e][r])
         for tau in g.vertices()
-        for r in range(len(logical_edges)) for e in range(len(logical_edges))]
+        for r in range(len(logical_edges)) for e in range(len(logical_edges))
+        if tau in tc.get_out_neighbors(logical_edges[e].source())]
+    order += [
+        zeta[r+g.num_vertices()] - duration[r] - zeta[int(tau)] - 1 >= -M *
+        (1-delta_e_in_r[e][r])
+        for tau in g.vertices()
+        for r, e in product(range(len(logical_edges)), repeat=2)
+        if tau in tc.get_in_neighbors(logical_edges[e].source()) or  # is this one necessary?
+        tau == logical_edges[e].source()]
     exclusion = list(chain.from_iterable(
-                         [[-M * delta_tau_before_r[int(tau)][r] <=
-                           zeta[r + g.num_vertices()] - duration[r] -
-                           zeta[int(tau)],
-                           M * (1 - delta_tau_before_r[int(tau)][r]) +
-                           zeta[int(tau)] - g.vertex_properties
-                           ['durations'][tau] - 1 >= zeta
-                           [g.num_vertices() + r]]
-                          for tau in g.vertices()
-                          for r in range(len(logical_edges))]))
+        [[-M * delta_tau_before_r[int(tau)][r] <=
+          zeta[r + g.num_vertices()] - duration[r] - zeta[int(tau)],
+          M * (1 - delta_tau_before_r[int(tau)][r]) + zeta[int(tau)] -
+          g.vertex_properties['durations'][tau] - 1 >=
+          zeta[g.num_vertices() + r]]
+         for tau in g.vertices()
+         for r in range(len(logical_edges))]))
+    soft = [LOG(g.vertex_properties['soft'][tau]) <=
+            sum([delta_e_in_r_cross_chi_eq_i[(e, r)][len(logical_edges)+r][i] *
+                 LOG(LAMBDA(i))
+                 for i in range(1, JUMPTABLE_MAX)
+                 for r in range(len(logical_edges))
+                 for e in range(len(logical_edges))
+                 if logical_edges[e].source() in tc.get_in_neighbors(tau)]) +
+            sum([delta_chi_eq_i[e][i]*LOG(LAMBDA(i))
+                 for e in range(len(logical_edges))
+                 for i in range(1, JUMPTABLE_MAX)
+                 if logical_edges[e].source() in tc.get_in_neighbors(tau)])
+            for tau in tc.vertices()]
+    soft = list(filter(lambda x: type(x) != bool, soft))
 
-    constraints = domain + one_hot + CFOP + durations + \
-        label_to_delta + chi_to_delta + order + exclusion
-    # durations is not DCP
-    # label_to_delta is not DCP
-    # chi_to_delta is not DCP
-    print(all(map(lambda x: x.is_dcp(), exclusion)))
-    exit()
-    objective = Minimize(norm_inf(zeta))
+    constraints = domain + one_hot + CFOP + round_empty_to_delta + \
+        chi_to_delta + binary_mult_linearization + round_empty + \
+        task_partitioning_by_round + label_to_delta + order + durations + \
+        exclusion + soft
+    # print(all(map(lambda x: x.is_dcp(), constraints)))
+    # print('DEBUG: exiting...')
+    # exit()
+    verboseprint('\tsending to solver...')
+    objective = Minimize(cvxmax(zeta))
     problem = Problem(objective, constraints)
-    result = problem.solve()
-    print(result)
+    problem.solve(solver='GUROBI', verbose=True)
+    verboseprint('\tsolver returned ' + problem.status + '!')
+    return zeta, chi, duration, label
 
 
 if __name__ == '__main__':
+    verboseprint('loading graph...')
     g = load_graph(argv[1])
+    verboseprint('checking DAG...')
     assert(is_DAG(g))
     graph_draw(
         g,
@@ -596,5 +738,11 @@ if __name__ == '__main__':
         vertex_text=g.vertex_index,
         vertex_font_size=18)
 
-    model = get_makespan_optimal_soft_schedule(
-        g, {'A': 1, 'B': 1, 'C': 1, 'D': 1, 'GAMMA': 1})
+    network = {'A': 1, 'B': 1, 'C': 1, 'D': 1, 'GAMMA': 1, 'LAMBDA': LAMBDA}
+    model = get_makespan_optimal_soft_schedule(g, network)
+    zeta, chi, duration, label = model
+    print('zeta', zeta.value)
+    print('chi', chi.value)
+    print('duration', duration.value)
+    print('label', label.value)
+    draw_schedule_MIP(g, model, network, argv[1] + '_schedule_soft.png')

@@ -1,13 +1,12 @@
 TEST_GAMMA = 1
-TEST_D_N = 2
 
 
 def TEST_LAMBDA(n):
     from scipy.special import expit
-    if n < TEST_D_N:
+    if n < 1:
         return 0.0
     else:
-        return float(expit(n/2))
+        return float(expit(n))
 
 
 def TEST_BETA(n):
