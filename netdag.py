@@ -34,6 +34,7 @@ from cvxpy import sum as cvxsum
 from cvxpy import max as cvxmax
 from numpy import array
 from drawSvg import Drawing, Rectangle, Text, Line
+from colour import Color
 from itertools import product, chain
 from enum import IntEnum
 from network_statistics import LOG
@@ -363,22 +364,32 @@ def draw_schedule_MIP(g, model, network, filename):
     N_rounds = len(zeta.value) - N_tasks
     min_t = min(
         zeta[:N_tasks].value - g.vertex_properties['durations'].get_array())
-    # min_t = min(min_t, min(zeta[N_tasks:].value - duration.value))
     max_t = max(zeta.value)
     quantum = (WIDTH-RIGHT-LEFT) / (max_t-min_t)
     block_height = (HEIGHT-TOP-BOTTOM-ROW_OFFSET*(N_tasks)) / (N_tasks+1)
     for i in range(N_tasks):
+        color = list(
+            Color('red').range_to('green', 1000))[
+                max(0, int(g.vertex_properties['soft'][i]*999))]
         d.append(Rectangle(
             quantum*abs(min_t) + LEFT+quantum*(zeta[i].value -
                                                g.vertex_properties[
                                                    'durations'][i]),
             HEIGHT-TOP-ROW_OFFSET*i-block_height*(i+1),
-            # model.get_py_value(duration[i]),
             quantum*g.vertex_properties['durations'][i],
             block_height,
-            fill='green',
+            fill=color.get_hex_l(),
             stroke_width=2,
             stroke='black'))
+        if g.vertex_properties['deadlines'][i] >= 0:
+            x = quantum*abs(min_t) + LEFT+quantum*(
+                g.vertex_properties['deadlines'][i])
+            d.append(
+                Line(x, HEIGHT-TOP-ROW_OFFSET*i-block_height*(i+1),
+                     x, HEIGHT-TOP-ROW_OFFSET*i-block_height*i,
+                     stroke_width=4,
+                     stroke='purple'))
+
         d.append(
             Text(
                 str(i),
@@ -394,29 +405,9 @@ def draw_schedule_MIP(g, model, network, filename):
             HEIGHT-TOP-ROW_OFFSET*N_tasks-block_height*(N_tasks+1),
             quantum*duration[i].value,
             block_height,
-            fill='red',
+            fill='gray',
             stroke_width=2,
             stroke='black'))
-        # d.append(Rectangle(
-        #     quantum*abs(min_t)+LEFT+quantum*(model.get_py_value(zeta[i]) -
-        #                                      model.get_py_value(duration[i])),
-        #     HEIGHT-TOP-ROW_OFFSET*N_tasks-block_height*(N_tasks+1),
-        #     quantum*gamma,
-        #     block_height,
-        #     fill='yellow',
-        #     stroke_width=2,
-        #     stroke='black'))
-        # for j in range(1, model.get_py_value(chi[i-N_tasks])):
-        #     round_width = (model.get_py_value(
-        #         duration[i])-gamma)/model.get_py_value(chi[i-N_tasks])
-        #     x = LEFT+quantum*(abs(min_t)+(model.get_py_value(
-        #         zeta[i]) - model.get_py_value(duration[i]))+gamma+j*round_width)
-        #     d.append(
-        #         Line(
-        #             x, HEIGHT - TOP - ROW_OFFSET * N_tasks - block_height *
-        #             (N_tasks + 1),
-        #             x, HEIGHT - TOP - ROW_OFFSET * N_tasks - block_height *
-        #             N_tasks, stroke='black', stroke_width=2))
     d.append(
         Text(
             'LWB',
@@ -687,7 +678,7 @@ def get_makespan_optimal_soft_schedule(g, network):
         (1-delta_e_in_r[e][r])
         for tau in g.vertices()
         for r, e in product(range(len(logical_edges)), repeat=2)
-        if tau in tc.get_in_neighbors(logical_edges[e].source()) or  # is this one necessary?
+        if tau in tc.get_in_neighbors(logical_edges[e].source()) or
         tau == logical_edges[e].source()]
     exclusion = list(chain.from_iterable(
         [[-M * delta_tau_before_r[int(tau)][r] <=
@@ -708,13 +699,17 @@ def get_makespan_optimal_soft_schedule(g, network):
                  for e in range(len(logical_edges))
                  for i in range(1, JUMPTABLE_MAX)
                  if logical_edges[e].source() in tc.get_in_neighbors(tau)])
-            for tau in tc.vertices()]
+            for tau in g.vertices()
+            if g.vertex_properties['soft'][tau] >= 0]
     soft = list(filter(lambda x: type(x) != bool, soft))
+    deadline = [zeta[int(tau)] <= g.vertex_properties['deadlines'][tau]
+                for tau in g.vertices()
+                if g.vertex_properties['deadlines'][tau] >= 0]
 
     constraints = domain + one_hot + CFOP + round_empty_to_delta + \
         chi_to_delta + binary_mult_linearization + round_empty + \
         task_partitioning_by_round + label_to_delta + order + durations + \
-        exclusion + soft
+        exclusion + soft + deadline
     # print(all(map(lambda x: x.is_dcp(), constraints)))
     # print('DEBUG: exiting...')
     # exit()
