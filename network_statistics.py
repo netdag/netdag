@@ -1,7 +1,7 @@
 TEST_GAMMA = 1
 
 
-def TEST_LAMBDA(n):
+def TEST_LAMBDA_SOFT(n):
     from scipy.special import expit
     if n < 1:
         return 0.0
@@ -9,7 +9,7 @@ def TEST_LAMBDA(n):
         return float(expit(n))
 
 
-def TEST_BETA(n):
+def TEST_LAMBDA_WEAKLY_HARD(n):
     return (1, 1000)
 
 
