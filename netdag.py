@@ -7,18 +7,20 @@ from pysmt.typing import INT
 from pysmt.shortcuts import (
     Solver,
     Symbol,
+    Int,
     GE,
     LE,
-    Int,
-    And,
-    Implies,
-    Ite,
-    Minus,
     GT,
     LT,
+    Minus,
     Plus,
     Times,
     Equals,
+    And,
+    Or,
+    Implies,
+    Iff,
+    Ite,
     ForAll)
 from cvxpy import (
     matmul,
@@ -294,7 +296,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     # SMT formulation
     tc = transitive_closure(g)
     logical_edges = get_logical_edges(g)
-    JUMPTABLE_MAX = 20
+    JUMPTABLE_MAX = 30
     A, B, C, D, GAMMA, LAMBDA = (network[key]
                                  for key in
                                  ('A', 'B', 'C', 'D', 'GAMMA', 'LAMBDA'))
@@ -316,6 +318,17 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     delta_tau_before_r = [[Symbol('delta_tau_before_r-%i_%i' % (i, j), INT)
                            for j in range(len(logical_edges))]
                           for i in range(g.num_vertices()+len(logical_edges))]
+    # WH ForAll variables
+    max_K = max(map(lambda x: x[1], g.vertex_properties['weakly-hard']))
+    omega_tau = [[Symbol('omega_tau_%i_%i' % (i, j), INT)
+                  for j in range(max_K)]
+                 for i in range(g.num_vertices())]
+    omega_e = [[Symbol('omega_e_%i_%i' % (i, j), INT)
+                for j in range(max_K)]
+               for i in range(len(logical_edges))]
+    omega_r = [[Symbol('omega_r_%i_%i' % (i, j), INT)
+                for j in range(max_K)]
+               for i in range(len(logical_edges))]
 
     vprint('\tgenerating constraint clauses...')
     domain = And([
@@ -455,6 +468,70 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
         for tau in g.vertices()
         if g.vertex_properties['deadlines'][tau] >= 0
     ])
+    WH = ForAll(
+        list(chain.from_iterable(omega_tau+omega_e+omega_r)),
+        Implies(
+            And(
+                And([And(LE(Int(0), sym), LE(sym, Int(1)))
+                     for sym in
+                     chain.from_iterable(omega_tau+omega_e+omega_r)]),
+                And([
+                    And([
+                        Implies(
+                            Equals(Int(i), chi[e]),
+                            And([
+                                LE(
+                                    Plus([
+                                        omega_e[e][ti]
+                                        for ti in
+                                        range(t, min(t+LAMBDA(i)[1], max_K))]),
+                                    Int(LAMBDA(i)[0]))
+                                for t in range(max(1, max_K - LAMBDA(i)[1]))]))
+                        for i in range(JUMPTABLE_MAX)])
+                    for e in range(len(logical_edges))]),
+                And([
+                    And([
+                        Implies(
+                            Equals(Int(i), chi[r+len(logical_edges)]),
+                            And([
+                                LE(
+                                    Plus([
+                                        omega_r[r][ti]
+                                        for ti in
+                                        range(t, min(t+LAMBDA(i)[1], max_K))]),
+                                    Int(LAMBDA(i)[0]))
+                                for t in range(max(1, max_K - LAMBDA(i)[1]))]))
+                        for i in range(JUMPTABLE_MAX)])
+                    for r in range(len(logical_edges))]),
+                And([
+                    And([
+                        Iff(
+                            Or([
+                                Or(
+                                    Equals(omega_e[e][ti], Int(1)),
+                                    Or([
+                                        And(
+                                            Equals(delta_e_in_r[e][r],
+                                                   Int(1)),
+                                            Equals(omega_r[r][ti],
+                                                   Int(1)))
+                                        for r in range(len(logical_edges))]))
+                                for e in range(len(logical_edges))
+                                if logical_edges[e].source() in
+                                tc.get_in_neighbors(tau)]),
+                            Equals(omega_tau[int(tau)][ti], Int(1)))
+                        for ti in range(max_K)])
+                    for tau in g.vertices()])),
+            And([
+                LE(
+                    Plus([
+                        omega_tau[int(tau)][ti]
+                        for ti in
+                        range(g.vertex_properties[
+                            'weakly-hard'][tau][1])]),
+                    Int(g.vertex_properties['weakly-hard'][tau][0]))
+                for tau in g.vertices()
+            ])))
 
     formula = And([
         domain, one_hot, CFOP, task_partitioning_by_round, round_empty,
@@ -462,13 +539,18 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     ])
     vprint('\tchecking feasibility...')
     solver = Solver(name='z3', incremental=True)
+    # Portfolio solver returns incorrect results?
+    # solver = Portfolio([('z3', {'random_seed': 13*i})
+    #                     for i in range(8)],
+    #                    incremental=True,
+    #                    logic='NIA')
     solver.add_assertion(formula)
-    solver.solve()
-    models = [solver.get_model()]
-    if not models[-1]:
+    result = solver.solve()
+    if not result:
         vprint('\tsolver returned infeasible!')
         return [None] * 4
     else:
+        models = [solver.get_model()]
         vprint('\tsolver found a feasible solution, optimizing...')
 
     LB = 0
