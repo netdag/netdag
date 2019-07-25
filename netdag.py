@@ -483,11 +483,21 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
         for tau in g.vertices()
         if g.vertex_properties['deadlines'][tau] >= 0
     ])
+
     def sum_m(tau): return Plus([
         Plus(
-            Ite(Equals(delta_chi_eq_i[e][i], Int(1)), Int(LAMBDA(i)[0]), Int(0)),
+            Ite(
+                Equals(delta_chi_eq_i[e][i], Int(1)),
+                Int(LAMBDA(i)[0]),
+                Int(0)),
             Plus([
-                Ite(Equals(delta_chi_eq_i[len(logical_edges)+r][i], Int(1)), Ite(Equals(delta_e_in_r[e][r], Int(1)), Int(LAMBDA(i)[0]), Int(0)), Int(0))
+                Ite(
+                    Equals(delta_chi_eq_i[len(logical_edges)+r][i], Int(1)),
+                    Ite(
+                        Equals(delta_e_in_r[e][r], Int(1)),
+                        Int(LAMBDA(i)[0]),
+                        Int(0)),
+                    Int(0))
                 for r in range(len(logical_edges))]))
         for i in range(JUMPTABLE_MAX)
         for e in range(len(logical_edges))
@@ -496,9 +506,17 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
 
     def min_K(tau): return Min([
         Min(
-            Ite(Equals(delta_chi_eq_i[e][i], Int(1)), Int(LAMBDA(i)[1]), Int(K_MAX)),
+            Ite(
+                Equals(delta_chi_eq_i[e][i], Int(1)),
+                Int(LAMBDA(i)[1]),
+                Int(K_MAX)),
             Min([
-                Ite(Equals(delta_chi_eq_i[len(logical_edges)+r][i], Int(1)), Ite(Equals(delta_e_in_r[e][r], Int(1)), Int(LAMBDA(i)[1]), Int(K_MAX)), Int(K_MAX))
+                Ite(
+                    Equals(delta_chi_eq_i[len(logical_edges)+r][i], Int(1)),
+                    Ite(Equals(delta_e_in_r[e][r], Int(1)),
+                        Int(LAMBDA(i)[1]),
+                        Int(K_MAX)),
+                    Int(K_MAX))
                 for r in range(len(logical_edges))]))
         for i in range(JUMPTABLE_MAX)
         for r in range(len(logical_edges))
@@ -553,6 +571,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
             vprint('\tfound new lower bound %i, optimizing...' % curr_B)
             LB = curr_B
         curr_B = LB + int(ceil((UB - LB) / 2))
+    vprint('\tsolver returned optimal (under composition+P.O. abstractions)!')
     best_model = models[-1]
     zeta = list(map(lambda x: best_model.get_py_value(x), zeta))
     chi = list(map(lambda x: best_model.get_py_value(x), chi))
