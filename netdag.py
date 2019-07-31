@@ -35,7 +35,7 @@ from drawSvg import Drawing, Rectangle, Text, Line
 from colour import Color
 from itertools import product, chain
 from network_statistics import LOG
-# from network_statistics import TEST_LAMBDA_SOFT as LAMBDA_SOFT
+from network_statistics import TEST_LAMBDA_SOFT as LAMBDA_SOFT
 from network_statistics import TEST_LAMBDA_WEAKLY_HARD as LAMBDA_WEAKLY_HARD
 
 
@@ -128,7 +128,7 @@ def get_makespan_optimal_soft_schedule(g, network):
     # MILP formulation
     tc = transitive_closure(g)
     logical_edges = get_logical_edges(g)
-    JUMPTABLE_MAX = 20
+    JUMPTABLE_MAX = 6
     A, B, C, D, GAMMA, LAMBDA = (network[key]
                                  for key in
                                  ('A', 'B', 'C', 'D', 'GAMMA', 'LAMBDA'))
@@ -163,19 +163,23 @@ def get_makespan_optimal_soft_schedule(g, network):
     delta_empty = Variable(shape=(len(logical_edges),), boolean=True)
 
     vprint('\tgenerating constraint clauses...')
+    vprint('\t\tdomain')
     domain = [
         1 <= label,
         label <= len(logical_edges),
         1 <= chi,
         chi <= JUMPTABLE_MAX-1,
         0 <= zeta]
+    vprint('\t\tone_hot')
     one_hot = [
         cvxsum(delta_e_in_r, axis=1) == 1,
         cvxsum(delta_chi_eq_i, axis=1) == 1]
+    vprint('\t\tCFOP')
     CFOP = [
         label[logical_edges.index(r)] <= label[logical_edges.index(s)] - 1
         for r, s in product(logical_edges, repeat=2)
         if r.source() in tc.get_in_neighbors(s.source())]
+    vprint('\t\ttask_partitioning_by_round')
     task_partitioning_by_round = [
         delta_tau_before_r[int(tau)][r] <= delta_tau_before_r[int(mu)][r]
         for tau, mu, r in
@@ -185,6 +189,7 @@ def get_makespan_optimal_soft_schedule(g, network):
         delta_tau_before_r[r+g.num_vertices()][s] == 0
         if r < s else delta_tau_before_r[r+g.num_vertices()][s] == 1
         for r, s in product(range(len(logical_edges)), repeat=2)]
+    vprint('\t\tround_empty')
     round_empty = [
         chi[len(logical_edges):] <= M * cvxsum(delta_e_in_r, axis=0) + 1]
     round_empty_to_delta = [
@@ -192,6 +197,7 @@ def get_makespan_optimal_soft_schedule(g, network):
         for r, e in product(range(len(logical_edges)), repeat=2)]
     round_empty_to_delta += [
         delta_empty >= cvxsum(1-delta_e_in_r, axis=0)-len(logical_edges)+1]
+    vprint('\t\tdurations')
     durations = [
         duration[r] == A +
         (2 * chi[r + len(logical_edges)] + B) * (C + D * GAMMA) -
@@ -205,16 +211,19 @@ def get_makespan_optimal_soft_schedule(g, network):
              (C + D * g.edge_properties['widths'][logical_edges[e]])
              for e in range(len(logical_edges))])
         for r in range(len(logical_edges))]
+    vprint('\t\tlabel_to_delta')
     label_to_delta = [
         label == matmul(
             delta_e_in_r,
             array(
                 range(1,
                       1+len(logical_edges))))]
+    vprint('\t\tchi_to_delta')
     chi_to_delta = [
         chi == matmul(
             delta_chi_eq_i,
             array(range(JUMPTABLE_MAX)))]
+    vprint('\t\tbinary_mult_linearization')
     binary_mult_linearization = list(chain.from_iterable(
         [[0 <= delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i],
           delta_e_in_r_cross_chi_eq_i[(e, r)][chir][i] <= 1,
@@ -229,6 +238,7 @@ def get_makespan_optimal_soft_schedule(g, network):
              range(len(logical_edges)),
              range(2*len(logical_edges)),
              range(JUMPTABLE_MAX))]))
+    vprint('\t\torder')
     order = [
         zeta[int(tau)] <= zeta[int(mu)] - g.vertex_properties['durations'][mu] -
         1 for tau, mu in product(g.vertices(),
@@ -251,6 +261,7 @@ def get_makespan_optimal_soft_schedule(g, network):
         for r, e in product(range(len(logical_edges)), repeat=2)
         if tau in tc.get_in_neighbors(logical_edges[e].source()) or
         tau == logical_edges[e].source()]
+    vprint('\t\texclusion')
     exclusion = list(chain.from_iterable(
         [[-M * delta_tau_before_r[int(tau)][r] <=
           zeta[r + g.num_vertices()] - duration[r] - zeta[int(tau)] - 1,
@@ -259,6 +270,7 @@ def get_makespan_optimal_soft_schedule(g, network):
           zeta[g.num_vertices() + r]]
          for tau in g.vertices()
          for r in range(len(logical_edges))]))
+    vprint('\t\tsoft')
     soft = [LOG(g.vertex_properties['soft'][tau]) <=
             sum([delta_e_in_r_cross_chi_eq_i[(e, r)][len(logical_edges)+r][i] *
                  LOG(LAMBDA(i))
@@ -273,6 +285,7 @@ def get_makespan_optimal_soft_schedule(g, network):
             for tau in g.vertices()
             if g.vertex_properties['soft'][tau] >= 0]
     soft = list(filter(lambda x: type(x) != bool, soft))
+    vprint('\t\tdeadline')
     deadline = [zeta[int(tau)] <= g.vertex_properties['deadlines'][tau]
                 for tau in g.vertices()
                 if g.vertex_properties['deadlines'][tau] >= 0]
@@ -588,16 +601,6 @@ if __name__ == '__main__':
     graph_draw(
         g,
         output=argv[1] +
-        '_task_graph.png',
+        '_task-graph.png',
         vertex_text=g.vertex_index,
         vertex_font_size=18)
-
-    network = {'A': 1, 'B': 1, 'C': 1, 'D': 1, 'GAMMA': 1,
-               'LAMBDA': LAMBDA_WEAKLY_HARD}
-    model = get_makespan_optimal_weakly_hard_schedule(g, network)
-    zeta, chi, duration, label = model
-    print('zeta', zeta)
-    print('chi', chi)
-    print('duration', duration)
-    print('label', label)
-    draw_schedule(g, model, argv[1] + '_schedule_weakly_hard.png')
