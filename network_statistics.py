@@ -10,7 +10,7 @@ def TEST_LAMBDA_SOFT(n):
 
 
 def TEST_LAMBDA_WEAKLY_HARD(n):
-    return (max(0, 5-n), 1000)
+    return (max(0, 5-n), n*1000)
 
 
 def LOG(f):

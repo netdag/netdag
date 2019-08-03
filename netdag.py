@@ -23,6 +23,7 @@ from pysmt.shortcuts import (
     Iff,
     Ite,
     ForAll)
+from pysmt.solvers.solver import SolverReturnedUnknownResultError
 from cvxpy import (
     matmul,
     Variable,
@@ -300,7 +301,7 @@ def get_makespan_optimal_soft_schedule(g, network):
     vprint('\tsending to solver...')
     objective = Minimize(cvxmax(zeta))
     problem = Problem(objective, constraints)
-    problem.solve(solver='GUROBI', verbose=True)
+    problem.solve(solver='CPLEX', verbose=True)
     vprint('\tsolver returned ' + problem.status + '!')
     return zeta.value, chi.value, duration.value, label.value
 
@@ -311,7 +312,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     tc = transitive_closure(g)
     logical_edges = get_logical_edges(g)
     JUMPTABLE_MAX = 6
-    K_MAX = 4000  # LAMBDA(i)[1] < K_MAX for all i < JUMPTABLE_MAX
+    K_MAX = 5001  # LAMBDA(i)[1] < K_MAX for all i < JUMPTABLE_MAX
 
     A, B, C, D, GAMMA, LAMBDA = (network[key]
                                  for key in
@@ -336,27 +337,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     delta_tau_before_r = [[Symbol('delta_tau_before_r-%i_%i' % (i, j), INT)
                            for j in range(len(logical_edges))]
                           for i in range(g.num_vertices()+len(logical_edges))]
-    # WH ForAll variables
-    omega_tau = {tau: [Symbol('omega(%i)_tau_%i' % (int(tau), j), INT)
-                       for j in
-                       range(g.vertex_properties['weakly-hard'][tau][1])]
-                 for tau in g.vertices()
-                 if g.vertex_properties['weakly-hard'][tau][0] >= 0}
-    omega_e = {tau: {i: [Symbol('omega(%i)_e_%i_%i' % (int(tau), i, j), INT)
-                         for j in
-                         range(g.vertex_properties['weakly-hard'][tau][1])]
-                     for i in range(len(logical_edges))
-                     if logical_edges[i].source() in
-                     tc.get_in_neighbors(tau)}
-               for tau in g.vertices()
-               if g.vertex_properties['weakly-hard'][tau][0] >= 0}
-    omega_r = {tau: [[Symbol('omega(%i)_r_%i_%i' % (int(tau), i, j), INT)
-                      for j in
-                      range(g.vertex_properties['weakly-hard'][tau][1])]
-                     for i in range(len(logical_edges))]
-               for tau in g.vertices()
-               if g.vertex_properties['weakly-hard'][tau][0] >= 0}
-
+    
     vprint('\tgenerating constraint clauses...')
     domain = And([
         And([And(LE(Int(1), sym), LE(sym, Int(len(logical_edges))))
@@ -497,7 +478,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
         if g.vertex_properties['deadlines'][tau] >= 0
     ])
 
-    def sum_m(tau): return Plus([
+    def sum_m(tau): return Plus([Int(0)]+[
         Plus(
             Ite(
                 Equals(delta_chi_eq_i[e][i], Int(1)),
@@ -517,7 +498,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
         if logical_edges[e].source() in
         tc.get_in_neighbors(tau)])
 
-    def min_K(tau): return Min([
+    def min_K(tau): return Min([Int(K_MAX)]+[
         Min(
             Ite(
                 Equals(delta_chi_eq_i[e][i], Int(1)),
@@ -546,7 +527,6 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
                min_K(tau)))
         for tau in g.vertices()
         if g.vertex_properties['weakly-hard'][tau][0] >= 0])
-    # print(WH.serialize())
 
     formula = And([
         domain, one_hot, CFOP, task_partitioning_by_round, round_empty,
@@ -568,20 +548,25 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     else:
         models = [solver.get_model()]
         vprint('\tsolver found a feasible solution, optimizing...')
-
+    
+    solver.z3.set('timeout', 10*60*1000)
     LB = 0
     UB = max(map(lambda x: models[-1].get_py_value(x), zeta))
     curr_B = UB // 2
     while range(LB+1, UB):
-        result = solver.solve([And([LT(zeta_tau, Int(curr_B))
-                                    for zeta_tau in zeta])])
+        try:
+            result = solver.solve([And([LT(zeta_tau, Int(curr_B))
+                                        for zeta_tau in zeta])])
+        except SolverReturnedUnknownResultError:
+            vprint('\t(timeout, not necessarily unsat)')
+            result = None
         if result:
             vprint('\tfound feasible solution of length %i, optimizing...' %
                    curr_B)
             models.append(solver.get_model())
             UB = curr_B
         else:
-            vprint('\tfound new lower bound %i, optimizing...' % curr_B)
+            vprint('\tnew lower bound %i, optimizing...' % curr_B)
             LB = curr_B
         curr_B = LB + int(ceil((UB - LB) / 2))
     vprint('\tsolver returned optimal (under composition+P.O. abstractions)!')
