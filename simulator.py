@@ -59,7 +59,7 @@ def simulate_soft(g, model, lambda_s, N_iter=100):
             for e in l_e:
                 if e.source() in tc.get_in_neighbours(v):
                     parents.add(l_e.index(e))
-                    parents.add(len(l_e)+label[l_e.index(e)]-1)
+                    parents.add(int(len(l_e)+label[l_e.index(e)]-1))
         if not parents:
             continue
         succ = sum(reduce(
