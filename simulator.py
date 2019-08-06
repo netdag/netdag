@@ -1,12 +1,16 @@
 from pysmt.shortcuts import (
     Int, Symbol, Solver, Plus, And, Or, LE, Equals, NotEquals)
 from pysmt.typing import INT
-from sys import argv
 from numpy.random import randint, random
 from numpy import logical_and, array, logical_or
 from netdag import get_logical_edges
 from graph_tool.topology import transitive_closure
 from functools import reduce, partial
+
+
+def check_WH(m, K, K_seq):
+    return all([sum(K_seq[t:min(len(K_seq), t+K)]) <=
+                m for t in range(max(1, len(K_seq)-K+1))])
 
 
 def k_sequence_WH(m, K, K_seq_len=100, count=100):
@@ -15,7 +19,11 @@ def k_sequence_WH(m, K, K_seq_len=100, count=100):
     K_window = And([LE(Plus(k_seq[t:min(K_seq_len, t+K)]), Int(m))
                     for t in range(max(1, K_seq_len-K+1))])
     formula = And(domain, K_window)
-    solver = Solver(name='z3', incremental=True, random_seed=randint(2 << 30))
+    solver = Solver(
+        name='yices',
+        incremental=True,
+        random_seed=randint(
+            2 << 30))
     solver.add_assertion(formula)
     for _ in range(count):
         result = solver.solve()
@@ -28,7 +36,8 @@ def k_sequence_WH(m, K, K_seq_len=100, count=100):
             solver.add_assertion(formula)
             solver.solve()
         model = solver.get_model()
-        model = array(list(map(lambda x: model.get_py_value(x), k_seq)), dtype=bool)
+        model = array(
+            list(map(lambda x: model.get_py_value(x), k_seq)), dtype=bool)
         yield model
         solver.add_assertion(Or([NotEquals(k_seq[i], Int(model[i]))
                                  for i in range(K_seq_len)]))
@@ -85,16 +94,22 @@ def simulate_weakly_hard(g, model, lambda_wh, N_iter=100, K_seq_len=10):
                     parents.add(len(l_e)+label[l_e.index(e)]-1)
         if not parents:
             continue
-        for i in zip(*(k_seq_WH_sim(*lambda_wh(chi[i])) for i in parents)):
-            print(reduce(logical_or, i))
+        print(
+            '\t%i: checking constraint ' %
+            v,
+            list(WH),
+            '...',
+            sep='',
+            end=' ',
+            flush=True)
+        print(u'\u2713'
+              if all(map(lambda x: check_WH(*WH, reduce(logical_or, x)),
+                                   zip(*(k_seq_WH_sim(*lambda_wh(chi[i]))
+                                         for i in parents))))
+              else u'\u292C')
 
 
 if __name__ == '__main__':
-    # blocking = []
-    # for _ in range(10000):
-    #     model = k_sequence(0, 3, K_seq_len=20, blocking=blocking)
-    #     print(model)
-    #     blocking.append(model)
     from network_statistics import TEST_LAMBDA_SOFT as LAMBDA_SOFT
     from network_statistics import TEST_LAMBDA_WEAKLY_HARD as LAMBDA_WEAKLY_HARD
     from graph_tool import load_graph
@@ -115,5 +130,5 @@ if __name__ == '__main__':
         g,
         model,
         LAMBDA_WEAKLY_HARD,
-        N_iter=1000,
+        N_iter=10000,
         K_seq_len=100)
