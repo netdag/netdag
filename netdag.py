@@ -129,7 +129,7 @@ def get_makespan_optimal_soft_schedule(g, network):
     # MILP formulation
     tc = transitive_closure(g)
     logical_edges = get_logical_edges(g)
-    JUMPTABLE_MAX = 6
+    JUMPTABLE_MAX = 20
     A, B, C, D, GAMMA, LAMBDA = (network[key]
                                  for key in
                                  ('A', 'B', 'C', 'D', 'GAMMA', 'LAMBDA'))
