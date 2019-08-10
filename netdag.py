@@ -301,7 +301,8 @@ def get_makespan_optimal_soft_schedule(g, network):
     vprint('\tsending to solver...')
     objective = Minimize(cvxmax(zeta))
     problem = Problem(objective, constraints)
-    problem.solve(solver='CPLEX', verbose=True)
+    # focus on improving the bound, limit 100GB for storing nodes, aggresively generate all cut types
+    problem.solve(solver='GUROBI', verbose=True, MIPFocus=3, NodefileStart=100, Cuts=2)
     vprint('\tsolver returned ' + problem.status + '!')
     return zeta.value, chi.value, duration.value, label.value
 
