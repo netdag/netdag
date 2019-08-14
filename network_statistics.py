@@ -21,3 +21,13 @@ def TEST_LAMBDA_WEAKLY_HARD(n):
 def LOG(f):
     from numpy import log
     return float(log(f))
+
+
+def MIMO_lambda_weakly_hard(n):
+    from math import floor, e
+    return (int(floor(10 * e ** (-0.5 * n) + 1)), max(20, n*20))
+
+
+def WH_cmp(x, y):
+    from math import floor, ceil
+    return y[0] <= max(floor(y[1]/x[1])*x[0], y[1]+ceil(y[1]/x[1])*(x[0]-x[1]))
