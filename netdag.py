@@ -307,7 +307,7 @@ def get_makespan_optimal_soft_schedule(g, network):
     return zeta.value, chi.value, duration.value, label.value
 
 
-def get_makespan_optimal_weakly_hard_schedule(g, network):
+def get_makespan_optimal_weakly_hard_schedule(g, network, feasibility_timeout=None):
     vprint('*computing optimal weakly-hard real-time schedule via SMT*')
     # SMT formulation
     tc = transitive_closure(g)
@@ -541,8 +541,13 @@ def get_makespan_optimal_weakly_hard_schedule(g, network):
     #                     for i in range(6)],
     #                    incremental=True,
     #                    logic='NIA')
+    if feasibility_timeout:
+        solver.z3.set('timeout', feasibility_timeout)
     solver.add_assertion(formula)
-    result = solver.solve()
+    try:
+        result = solver.solve()
+    except SolverReturnedUnknownResultError:
+        result = None
     if not result:
         vprint('\tsolver returned infeasible!')
         return [None] * 4
