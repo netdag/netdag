@@ -1,6 +1,6 @@
 import os
 from pysmt.shortcuts import (
-    Int, Symbol, Solver, Plus, And, Or, LE, LT, Equals, NotEquals)
+    Int, Symbol, Solver, Plus, And, Or, LE, LT, GT, Equals, NotEquals)
 from pysmt.typing import INT
 from numpy.random import randint, random
 from numpy import logical_and, array, logical_or
@@ -49,33 +49,49 @@ def k_sequence_WH_worst_case(m, K, K_seq_len=100, count=100):
     domain = And([Or(Equals(x, Int(0)), Equals(x, Int(1))) for x in k_seq])
     K_window = And([LE(Plus(k_seq[t:min(K_seq_len, t+K)]), Int(m))
                     for t in range(max(1, K_seq_len-K+1))])
-    formula = And(domain, K_window)
+    violate_up = And([GT(Plus(k_seq[t:min(K_seq_len, t+K)]), Int(m-1))
+                      for t in range(max(1, K_seq_len-K+1))])
+    def violate_right_generator(n):
+        return And([GT(Plus(k_seq[t:min(K_seq_len, t+K+n)]), Int(m))
+                      for t in range(max(1, K_seq_len-(K+n)+1))])
+    right_shift = 1
+    formula = And(domain, K_window, violate_up, violate_right_generator(right_shift))
     solver = Solver(
-        name='yices',
+        name='z3',
         incremental=True,
         random_seed=randint(
             2 << 30))
     solver.add_assertion(formula)
+    solver.z3.set('timeout', 5*60*1000)
+    solutions = And()
     for _ in range(count):
-        result = solver.solve()
-        if not result:
-            # the clever thing to do would be to keep the assertions about
-            # having new solutions. TODO
-            solver = Solver(
-                name='z3',
-                incremental=True,
-                random_seed=randint(
-                    2 << 30))
-            solver.add_assertion(formula)
-            solver.solve()
-        model = solver.get_model()
+        while right_shift + K < K_seq_len:
+            try:
+                result = solver.solve()
+            except:
+                result = None
+            if not result:
+                solver = Solver(
+                    name='z3',
+                    incremental=True,
+                    random_seed=randint(
+                        2 << 30))
+                right_shift += 1
+                solver.z3.set('timeout', 5*60*1000)
+                solver.add_assertion(And(solutions, domain, K_window, violate_up, violate_right_generator(right_shift)))
+            else:
+                break
+        try:
+            model = solver.get_model()
+        except:
+            break
         model = array(
             list(map(lambda x: model.get_py_value(x), k_seq)), dtype=bool)
         yield model
-        solver.add_assertion(Or([NotEquals(k_seq[i], Int(model[i]))
-                                 for i in range(K_seq_len)]))
-        solver.add_assertion(LT(Int(int(sum(model))), Plus(k_seq)))
-
+        solution = Or([NotEquals(k_seq[i], Int(model[i]))
+                                 for i in range(K_seq_len)])
+        solutions = And(solutions, solution)
+        solver.add_assertion(solution)
 
 def k_sequence_WH_worker(x):
     fname = os.path.join('WH-traces', '%03d_%03d.txt' % x[::-1])
