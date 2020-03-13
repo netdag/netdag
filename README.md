@@ -25,6 +25,7 @@ pip install -r requirements.txt
 Our code has the following non-python dependencies:
 
  - z3, yices as SMT backends for pysmt
+ - graph_tool for graph manipulation and reading/writing input/output files
  - Gurobi Optimizer version 8.0.1 build v8.0.1rc0 (linux64)
 
 z3 and yices can be installed via
@@ -36,7 +37,9 @@ pysmt-install --z3 --yices
 Note that `pysmt-install` comes with the pysmt pip package and will
 install the correct versions of z3 and yices for you. Gurobi must be
 installed following the instructions on their website, you will need to
-first obtain a license (free for academic use).
+first obtain a license (free for academic use). Graph tool can be
+installed following the instructions
+[here](https://git.skewed.de/count0/graph-tool/-/wikis/installation-instructions).
 
 ## Sample usage
 
