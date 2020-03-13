@@ -1,17 +1,12 @@
 # NetDAG
 
-We are committed to making our scheduler implementation publicly
-available. If our paper is accepted, we will improve reusability of our
-code, i.e. as a tool release, and provide more sample inputs. For now,
-we include four files. `netdag.py` includes our scheduler
-implementation, `network_statistics.py` is a configuration file where we
-can write down various soft/weakly-hard lambda functions,
-`simple-task-graph.xml.gz` is a simple test input, and
-`simulator.py` includes our validation tools.
+Scheduler implementation described in our DATE 2020 paper
+"Application-Aware Scheduling of Networked Applications over the
+Low-Power Wireless Bus."
 
 ## Dependencies
 
-Our code is implemented in Python3 (vers. 3.6.9) and has the following python
+Our code is implemented in python (vers. 3.6.9) and has the following python
 dependencies:
 
  - pysmt: for SMT formula manipulation
@@ -21,10 +16,27 @@ dependencies:
  - drawSVG: for drawing obtained schedules
  - colour: for color manipulation
 
-and the following non-python dependencies:
+The python dependencies can be installed via
 
- - z3, yices as SMT backends for pysmt (installed via pysmt-install)
- - GUROBI as MILP backend for cvxpy
+```console
+pip install -r requirements.txt
+```
+
+Our code has the following non-python dependencies:
+
+ - z3, yices as SMT backends for pysmt
+ - Gurobi Optimizer version 8.0.1 build v8.0.1rc0 (linux64)
+
+z3 and yices can be installed via
+
+```console
+pysmt-install --z3 --yices
+```
+
+Note that `pysmt-install` comes with the pysmt pip package and will
+install the correct versions of z3 and yices for you. Gurobi must be
+installed following the instructions on their website, you will need to
+first obtain a license (free for academic use).
 
 ## Sample usage
 

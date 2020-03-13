@@ -338,7 +338,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network, feasibility_timeout=No
     delta_tau_before_r = [[Symbol('delta_tau_before_r-%i_%i' % (i, j), INT)
                            for j in range(len(logical_edges))]
                           for i in range(g.num_vertices()+len(logical_edges))]
-    
+
     vprint('\tgenerating constraint clauses...')
     domain = And([
         And([And(LE(Int(1), sym), LE(sym, Int(len(logical_edges))))
@@ -536,11 +536,6 @@ def get_makespan_optimal_weakly_hard_schedule(g, network, feasibility_timeout=No
     ])
     vprint('\tchecking feasibility...')
     solver = Solver(name='z3', incremental=True, logic='LIA')
-    # Portfolio solver returns incorrect results?
-    # solver = Portfolio([('z3', {'random_seed': 13*i})
-    #                     for i in range(6)],
-    #                    incremental=True,
-    #                    logic='NIA')
     if feasibility_timeout:
         solver.z3.set('timeout', feasibility_timeout)
     solver.add_assertion(formula)
@@ -554,7 +549,7 @@ def get_makespan_optimal_weakly_hard_schedule(g, network, feasibility_timeout=No
     else:
         models = [solver.get_model()]
         vprint('\tsolver found a feasible solution, optimizing...')
-    
+
     solver.z3.set('timeout', optimization_timeout)
     LB = 0
     UB = max(map(lambda x: models[-1].get_py_value(x), zeta))

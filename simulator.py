@@ -51,11 +51,16 @@ def k_sequence_WH_worst_case(m, K, K_seq_len=100, count=100):
                     for t in range(max(1, K_seq_len-K+1))])
     violate_up = And([GT(Plus(k_seq[t:min(K_seq_len, t+K)]), Int(m-1))
                       for t in range(max(1, K_seq_len-K+1))])
+
     def violate_right_generator(n):
         return And([GT(Plus(k_seq[t:min(K_seq_len, t+K+n)]), Int(m))
-                      for t in range(max(1, K_seq_len-(K+n)+1))])
+                    for t in range(max(1, K_seq_len-(K+n)+1))])
     right_shift = 1
-    formula = And(domain, K_window, violate_up, violate_right_generator(right_shift))
+    formula = And(
+        domain,
+        K_window,
+        violate_up,
+        violate_right_generator(right_shift))
     solver = Solver(
         name='z3',
         incremental=True,
@@ -68,7 +73,7 @@ def k_sequence_WH_worst_case(m, K, K_seq_len=100, count=100):
         while right_shift + K < K_seq_len:
             try:
                 result = solver.solve()
-            except:
+            except BaseException:
                 result = None
             if not result:
                 solver = Solver(
@@ -78,20 +83,25 @@ def k_sequence_WH_worst_case(m, K, K_seq_len=100, count=100):
                         2 << 30))
                 right_shift += 1
                 solver.z3.set('timeout', 5*60*1000)
-                solver.add_assertion(And(solutions, domain, K_window, violate_up, violate_right_generator(right_shift)))
+                solver.add_assertion(And(solutions,
+                                         domain,
+                                         K_window,
+                                         violate_up,
+                                         violate_right_generator(right_shift)))
             else:
                 break
         try:
             model = solver.get_model()
-        except:
+        except BaseException:
             break
         model = array(
             list(map(lambda x: model.get_py_value(x), k_seq)), dtype=bool)
         yield model
         solution = Or([NotEquals(k_seq[i], Int(model[i]))
-                                 for i in range(K_seq_len)])
+                       for i in range(K_seq_len)])
         solutions = And(solutions, solution)
         solver.add_assertion(solution)
+
 
 def k_sequence_WH_worker(x):
     fname = os.path.join('WH-traces', '%03d_%03d.txt' % x[::-1])
