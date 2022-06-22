@@ -2,5 +2,5 @@ colour==0.1.5
 cplex==12.9.0.0
 cvxpy==1.0.8
 drawSvg==1.2.2
-numpy==1.17.0
+numpy==1.22.0
 PySMT==0.8.0
